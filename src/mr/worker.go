@@ -1,33 +1,27 @@
 package mr
 
-import "fmt"
-import "log"
-import "net/rpc"
-import "hash/fnv"
+import (
+	"fmt"
+	"hash/fnv"
+	"log"
+	"net/rpc"
+)
 
-
-//
 // Map functions return a slice of KeyValue.
-//
 type KeyValue struct {
 	Key   string
 	Value string
 }
 
-//
 // use ihash(key) % NReduce to choose the reduce
 // task number for each KeyValue emitted by Map.
-//
 func ihash(key string) int {
 	h := fnv.New32a()
 	h.Write([]byte(key))
 	return int(h.Sum32() & 0x7fffffff)
 }
 
-
-//
 // main/mrworker.go calls this function.
-//
 func Worker(mapf func(string, string) []KeyValue,
 	reducef func(string, []string) string) {
 
@@ -35,14 +29,13 @@ func Worker(mapf func(string, string) []KeyValue,
 
 	// uncomment to send the Example RPC to the coordinator.
 	// CallExample()
+	CallReal()
 
 }
 
-//
 // example function to show how to make an RPC call to the coordinator.
 //
 // the RPC argument and reply types are defined in rpc.go.
-//
 func CallExample() {
 
 	// declare an argument structure.
@@ -67,11 +60,32 @@ func CallExample() {
 	}
 }
 
-//
+func CallReal() {
+
+	// declare an argument structure.
+	args := RealArgs{}
+
+	// fill in the argument(s).
+	args.Query = "give me a job"
+
+	// declare a reply structure.
+	reply := RealReply{}
+
+	// send the RPC request, wait for the reply.
+	// the "Coordinator.RPCHandler" tells the
+	// receiving server that we'd like to call
+	// the RPCHandler() method of struct Coordinator.
+	ok := call("Coordinator.RPCHandler", &args, &reply)
+	if ok {
+		fmt.Println(reply.Result)
+	} else {
+		fmt.Printf("call failed!\n")
+	}
+}
+
 // send an RPC request to the coordinator, wait for the response.
 // usually returns true.
 // returns false if something goes wrong.
-//
 func call(rpcname string, args interface{}, reply interface{}) bool {
 	// c, err := rpc.DialHTTP("tcp", "127.0.0.1"+":1234")
 	sockname := coordinatorSock()

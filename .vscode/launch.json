@@ -1,0 +1,42 @@
+{
+    // Use IntelliSense to learn about possible attributes.
+    // Hover to view descriptions of existing attributes.
+    // For more information, visit: https://go.microsoft.com/fwlink/?linkid=830387
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "cwd": "${workspaceRoot}/src/main",
+            "name": "Debug Coordinator",
+            "type": "go",
+            "request": "launch",
+            "program": "${workspaceFolder}/src/main/mrcoordinator.go",
+            "args": [
+                "pg-*.txt"
+            ]
+            
+        },
+        {
+            "cwd": "${workspaceRoot}/src/main",
+            "name": "Debug Worker",
+            "type": "go",
+            "request": "launch",
+            "program": "${workspaceFolder}/src/main/mrworker.go",
+            "args": [
+                "wc.so"
+            ]
+            
+        },
+        {
+            "cwd": "${workspaceRoot}/src/main",
+            "name": "Debug Seq",
+            "type": "go",
+            "request": "launch",
+            "program": "${workspaceFolder}/src/main/mrsequential.go",
+            "args": [
+                "wc.so",
+                "pg-*.txt"
+            ]
+            
+        }
+    ]
+}
