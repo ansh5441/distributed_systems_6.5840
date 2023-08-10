@@ -29,7 +29,12 @@ type RealArgs struct {
 }
 
 type RealReply struct {
-	Result string
+	FileName      string
+	Command       string
+	NReduce       int
+	MapTaskNum    int
+	ReduceTaskNum int
+	Done          bool
 }
 
 // Add your RPC definitions here.

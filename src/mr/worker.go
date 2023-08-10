@@ -1,10 +1,13 @@
 package mr
 
 import (
+	"encoding/json"
 	"fmt"
 	"hash/fnv"
+	"io"
 	"log"
 	"net/rpc"
+	"os"
 )
 
 // Map functions return a slice of KeyValue.
@@ -29,39 +32,12 @@ func Worker(mapf func(string, string) []KeyValue,
 
 	// uncomment to send the Example RPC to the coordinator.
 	// CallExample()
-	CallReal()
+	CallReal(mapf, reducef)
 
 }
 
-// example function to show how to make an RPC call to the coordinator.
-//
-// the RPC argument and reply types are defined in rpc.go.
-func CallExample() {
-
-	// declare an argument structure.
-	args := ExampleArgs{}
-
-	// fill in the argument(s).
-	args.X = 99
-
-	// declare a reply structure.
-	reply := ExampleReply{}
-
-	// send the RPC request, wait for the reply.
-	// the "Coordinator.Example" tells the
-	// receiving server that we'd like to call
-	// the Example() method of struct Coordinator.
-	ok := call("Coordinator.Example", &args, &reply)
-	if ok {
-		// reply.Y should be 100.
-		fmt.Printf("reply.Y %v\n", reply.Y)
-	} else {
-		fmt.Printf("call failed!\n")
-	}
-}
-
-func CallReal() {
-
+func CallReal(mapf func(string, string) []KeyValue,
+	reducef func(string, []string) string) {
 	// declare an argument structure.
 	args := RealArgs{}
 
@@ -77,7 +53,44 @@ func CallReal() {
 	// the RPCHandler() method of struct Coordinator.
 	ok := call("Coordinator.RPCHandler", &args, &reply)
 	if ok {
-		fmt.Println(reply.Result)
+		if reply.Command == "map" {
+
+			fmt.Println(reply.FileName)
+			filename := reply.FileName
+			// ../main/filename
+			file, err := os.Open(fmt.Sprintf("../main/%v", filename))
+			if err != nil {
+				log.Fatalf("cannot open %v", filename)
+			}
+			defer file.Close()
+			content, err := io.ReadAll(file)
+			if err != nil {
+				log.Fatalf("cannot read %v", filename)
+			}
+			kva := mapf(filename, string(content))
+
+			// enc := json.NewEncoder(file)
+			filesList := []*json.Encoder{}
+			for r := 0; r < reply.NReduce; r++ {
+				intermediateFilename := fmt.Sprintf("../main/mr-tmp/mr-%d-%d.txt", reply.MapTaskNum, r)
+				intermediateFile, err := os.Create(intermediateFilename)
+				if err != nil {
+					log.Fatalf("cannot open %v", intermediateFilename)
+				}
+				defer intermediateFile.Close()
+				filesList = append(filesList, json.NewEncoder(intermediateFile))
+			}
+			for _, kv := range kva {
+				fmt.Println(kv.Key)
+				fmt.Println(kv.Value)
+				reduceNum := ihash(kv.Key) % reply.NReduce
+				enc := *filesList[reduceNum]
+				err := enc.Encode(&kv)
+				if err != nil {
+					log.Fatalf("error in writing to intermediate file - key: %v, reduce num: %d", kv.Key, reduceNum)
+				}
+			}
+		}
 	} else {
 		fmt.Printf("call failed!\n")
 	}

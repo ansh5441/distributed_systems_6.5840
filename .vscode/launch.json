@@ -16,7 +16,7 @@
             
         },
         {
-            "cwd": "${workspaceRoot}/src/main",
+            // "cwd": "${workspaceRoot}/src/main",
             "name": "Debug Worker",
             "type": "go",
             "request": "launch",

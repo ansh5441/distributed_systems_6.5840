@@ -13,6 +13,7 @@ type Coordinator struct {
 	// Your definitions here.
 	mapTaskQueue    []string
 	reduceTaskQueue []string
+	nReduce         int
 }
 
 // Your code here -- RPC handlers for the worker to call.
@@ -26,15 +27,19 @@ func (c *Coordinator) Example(args *ExampleArgs, reply *ExampleReply) error {
 }
 
 func (c *Coordinator) RPCHandler(args *RealArgs, reply *RealReply) error {
+	mapTaskNum := 0
+	totalMapTasks := len(c.mapTaskQueue)
 	if args.Query == "give me a job" {
-		if len(c.mapTaskQueue) > 0 {
-			reply.Result = c.mapTaskQueue[0]
-			c.mapTaskQueue = c.mapTaskQueue[1:]
+		if mapTaskNum < totalMapTasks {
+			reply.FileName = c.mapTaskQueue[mapTaskNum]
+			reply.Command = "map"
+			reply.NReduce = c.nReduce
+			reply.MapTaskNum = mapTaskNum
 		} else if len(c.reduceTaskQueue) > 0 {
-			reply.Result = c.reduceTaskQueue[0]
+			reply.FileName = c.reduceTaskQueue[0]
 			c.reduceTaskQueue = c.reduceTaskQueue[1:]
 		} else {
-			reply.Result = "no job"
+			reply.FileName = "no job"
 		}
 	}
 	return nil
@@ -72,6 +77,7 @@ func MakeCoordinator(files []string, nReduce int) *Coordinator {
 
 	// Your code here.
 	c.mapTaskQueue = append(c.mapTaskQueue, files...)
+	c.nReduce = nReduce
 	fmt.Println(c.mapTaskQueue)
 
 	c.server()
