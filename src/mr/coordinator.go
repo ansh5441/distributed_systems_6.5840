@@ -14,6 +14,7 @@ type Coordinator struct {
 	mapTaskQueue    []string
 	reduceTaskQueue []string
 	nReduce         int
+	mapTaskNum      int
 }
 
 // Your code here -- RPC handlers for the worker to call.
@@ -27,19 +28,22 @@ func (c *Coordinator) Example(args *ExampleArgs, reply *ExampleReply) error {
 }
 
 func (c *Coordinator) RPCHandler(args *RealArgs, reply *RealReply) error {
-	mapTaskNum := 0
 	totalMapTasks := len(c.mapTaskQueue)
 	if args.Query == "give me a job" {
-		if mapTaskNum < totalMapTasks {
-			reply.FileName = c.mapTaskQueue[mapTaskNum]
+		if c.mapTaskNum < totalMapTasks {
+			reply.FileName = c.mapTaskQueue[c.mapTaskNum]
 			reply.Command = "map"
 			reply.NReduce = c.nReduce
-			reply.MapTaskNum = mapTaskNum
+			reply.MapTaskNum = c.mapTaskNum
+			c.mapTaskNum++
+			fmt.Println("Task details: ", reply.FileName, reply.Command, reply.NReduce, reply.MapTaskNum)
 		} else if len(c.reduceTaskQueue) > 0 {
 			reply.FileName = c.reduceTaskQueue[0]
 			c.reduceTaskQueue = c.reduceTaskQueue[1:]
+			reply.Command = "reduce"
 		} else {
-			reply.FileName = "no job"
+			reply.FileName = "done"
+			reply.Done = true
 		}
 	}
 	return nil
