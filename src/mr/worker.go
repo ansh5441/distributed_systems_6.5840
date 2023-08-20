@@ -40,9 +40,6 @@ func Worker(mapf func(string, string) []KeyValue, reducef func(string, []string)
 		switch reply.Command {
 		case "wait":
 			log.Println("waiting for a job")
-		case "done":
-			log.Println("all jobs are done. exiting")
-			isDone = true
 		case "map":
 			success, err := executeMap(mapf, reply.FileName, reply.NReduce, reply.MapTaskNum)
 			if err != nil {
@@ -55,12 +52,16 @@ func Worker(mapf func(string, string) []KeyValue, reducef func(string, []string)
 		case "reduce":
 			success, err := executeReduce(reducef, reply.FileNames, reply.ReduceTaskNum)
 			if err != nil {
-				log.Println("error in executing map")
+				log.Println("error in executing reduce")
 			}
 			if success {
 				log.Printf("reduce task %d done", reply.ReduceTaskNum)
 			}
+		case "done":
+			isDone = true
+			log.Println("all tasks done")
 		default:
+			isDone = true
 			log.Println("unknown command")
 
 		}

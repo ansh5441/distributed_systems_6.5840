@@ -26,6 +26,8 @@ type MapTask struct {
 	State     int    // 0: pending, 1: in progress, 2: completed
 	Num       int    // task number
 	StartTime int64  // time when the task was assigned
+
+	//
 }
 
 type ReduceTask struct {
@@ -46,10 +48,12 @@ func (c *Coordinator) RPCHandler(args *Args, reply *Reply) error {
 	switch args.Query {
 	case "map done":
 		taskLock.Lock()
+
+		log.Println("Lock in map done")
 		c.MapTasks[args.MapTaskNum].State = Completed
 		// Add reduce tasks
 		for i := 0; i < c.nReduce; i++ {
-			filename := fmt.Sprintf("../main/mr-tmp/mr-%d-%d", args.MapTaskNum, i)
+			filename := fmt.Sprintf("../main/mr-tmp/mr-%d-%d.txt", args.MapTaskNum, i)
 			if len(c.ReduceTasks) <= i {
 				c.ReduceTasks = append(c.ReduceTasks, ReduceTask{[]string{filename}, Pending, 0, i})
 			} else {
@@ -57,15 +61,17 @@ func (c *Coordinator) RPCHandler(args *Args, reply *Reply) error {
 			}
 		}
 		taskLock.Unlock()
-		log.Println("Map done: ", args.FileName)
+		log.Printf("Map done: %v", args.FileName)
 	case "reduce done":
 		taskLock.Lock()
-		// c.ReduceTasks[args.ReduceTaskNum].State = Completed
+		log.Println("Lock in reduce done")
+		c.ReduceTasks[args.ReduceTaskNum].State = Completed
 		taskLock.Unlock()
 		log.Println("Reduce done: ", args.FileName)
 	case "give me a job":
 		// assign a map task if there is any
 		taskLock.Lock()
+		log.Println("Lock in give me a job")
 		for i, task := range c.MapTasks {
 			if task.State == Pending {
 				reply.FileName = task.FileName
@@ -74,11 +80,15 @@ func (c *Coordinator) RPCHandler(args *Args, reply *Reply) error {
 				reply.MapTaskNum = i
 				task.State = InProgress
 				task.StartTime = time.Now().Unix()
+				log.Println("Map task ", i, " assigned")
+				taskLock.Unlock()
 				return nil
 			}
 		}
+		taskLock.Unlock()
 		if !c.AllMapTasksDone() {
 			reply.Command = "wait"
+			log.Println("No map task available, wait")
 			return nil
 		}
 		// assign a reduce task if there is any
@@ -89,10 +99,10 @@ func (c *Coordinator) RPCHandler(args *Args, reply *Reply) error {
 				reply.ReduceTaskNum = task.Num
 				task.State = InProgress
 				task.StartTime = time.Now().Unix()
+				log.Printf("Reduce task %d assigned", task.Num)
 				return nil
 			}
 		}
-		taskLock.Unlock()
 		// no task left
 		reply.FileName = "done"
 		reply.Done = true
@@ -105,12 +115,13 @@ func (c *Coordinator) RPCHandler(args *Args, reply *Reply) error {
 // check if all map tasks are done
 func (c *Coordinator) AllMapTasksDone() bool {
 	taskLock.Lock()
+	log.Println("Lock in all map tasks done")
+	defer taskLock.Unlock()
 	for _, task := range c.MapTasks {
 		if task.State != Completed {
 			return false
 		}
 	}
-	taskLock.Unlock()
 	return true
 }
 
@@ -118,21 +129,24 @@ func (c *Coordinator) PeriodicHealthCheck() {
 
 	// check if any task is in progress for more than 10 seconds
 	// if so, mark it as pending
-	log.Println("Periodic health check")
+	log.Println("\n\nPeriodic health check")
 	taskLock.Lock()
+	log.Println("Lock in periodic health check")
+	defer taskLock.Unlock()
 	for i, task := range c.MapTasks {
+		log.Println("Map task ", i, " state: ", task.State)
 		if task.State == InProgress && time.Now().Unix()-task.StartTime > 10 {
 			task.State = Pending
 			log.Println("Map task ", i, " timed out")
 		}
 	}
 	for i, task := range c.ReduceTasks {
+		log.Println("Reduce task ", i, " state: ", task.State)
 		if task.State == InProgress && time.Now().Unix()-task.StartTime > 10 {
 			task.State = Pending
 			log.Println("Reduce task ", i, " timed out")
 		}
 	}
-	taskLock.Unlock()
 
 }
 
@@ -153,6 +167,8 @@ func (c *Coordinator) server() {
 // if the entire job has finished.
 func (c *Coordinator) Done() bool {
 	taskLock.Lock()
+	log.Println("Lock in done")
+	defer taskLock.Unlock()
 	for _, task := range c.MapTasks {
 		if task.State != Completed {
 			return false
@@ -163,7 +179,6 @@ func (c *Coordinator) Done() bool {
 			return false
 		}
 	}
-	taskLock.Unlock()
 	return true
 }
 
@@ -176,7 +191,7 @@ func MakeCoordinator(files []string, nReduce int) *Coordinator {
 	// run periodic health check
 	go func() {
 		for {
-			time.Sleep(1 * time.Second)
+			time.Sleep(5 * time.Second)
 			c.PeriodicHealthCheck()
 		}
 	}()
