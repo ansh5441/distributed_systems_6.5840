@@ -129,7 +129,7 @@ func executeReduce(reducef func(string, []string) string, fileNames []string, re
 		}
 
 		// Call reduce function
-		oname := fmt.Sprintf("../main/mr-out-%d", reduceTaskNum)
+		oname := fmt.Sprintf("mr-out-%d", reduceTaskNum)
 		ofile, _ := os.Create(oname)
 		defer ofile.Close()
 
@@ -165,7 +165,7 @@ func executeReduce(reducef func(string, []string) string, fileNames []string, re
 
 func executeMap(mapf func(string, string) []KeyValue, filename string, nReduce int, mapTaskNum int) (bool, error) {
 	// Open input file
-	file, err := os.Open(fmt.Sprintf("../main/%v", filename))
+	file, err := os.Open(filename)
 	if err != nil {
 		log.Printf("cannot open %v", filename)
 		return false, err
@@ -181,7 +181,7 @@ func executeMap(mapf func(string, string) []KeyValue, filename string, nReduce i
 	// Create intermediate files
 	filesList := []*json.Encoder{}
 	for r := 0; r < nReduce; r++ {
-		intermediateFilename := fmt.Sprintf("../main/mr-tmp/mr-%d-%d.txt", mapTaskNum, r)
+		intermediateFilename := fmt.Sprintf("mr-%d-%d.txt", mapTaskNum, r)
 		intermediateFile, err := os.Create(intermediateFilename)
 		if err != nil {
 			log.Printf("cannot open %v", intermediateFilename)

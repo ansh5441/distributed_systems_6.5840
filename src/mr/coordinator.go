@@ -53,7 +53,7 @@ func (c *Coordinator) RPCHandler(args *Args, reply *Reply) error {
 		c.MapTasks[args.MapTaskNum].State = Completed
 		// Add reduce tasks
 		for i := 0; i < c.nReduce; i++ {
-			filename := fmt.Sprintf("../main/mr-tmp/mr-%d-%d.txt", args.MapTaskNum, i)
+			filename := fmt.Sprintf("mr-%d-%d.txt", args.MapTaskNum, i)
 			if len(c.ReduceTasks) <= i {
 				c.ReduceTasks = append(c.ReduceTasks, ReduceTask{[]string{filename}, Pending, 0, i})
 			} else {
@@ -67,7 +67,7 @@ func (c *Coordinator) RPCHandler(args *Args, reply *Reply) error {
 		log.Println("Lock in reduce done")
 		c.ReduceTasks[args.ReduceTaskNum].State = Completed
 		taskLock.Unlock()
-		log.Println("Reduce done: ", args.FileName)
+		log.Println("Reduce done: ", args.ReduceTaskNum)
 	case "give me a job":
 		// assign a map task if there is any
 		taskLock.Lock()
@@ -91,6 +91,7 @@ func (c *Coordinator) RPCHandler(args *Args, reply *Reply) error {
 			log.Println("No map task available, wait")
 			return nil
 		}
+		taskLock.Lock()
 		// assign a reduce task if there is any
 		for _, task := range c.ReduceTasks {
 			if task.State == Pending {
@@ -100,9 +101,11 @@ func (c *Coordinator) RPCHandler(args *Args, reply *Reply) error {
 				task.State = InProgress
 				task.StartTime = time.Now().Unix()
 				log.Printf("Reduce task %d assigned", task.Num)
+				taskLock.Unlock()
 				return nil
 			}
 		}
+		taskLock.Unlock()
 		// no task left
 		reply.FileName = "done"
 		reply.Done = true
