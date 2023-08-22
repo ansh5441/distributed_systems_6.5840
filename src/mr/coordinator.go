@@ -16,7 +16,7 @@ var taskLock = sync.Mutex{}
 
 // Task states for map and reduce tasks
 const (
-	Pending = iota
+	Pending int = iota
 	InProgress
 	Completed
 )
@@ -39,8 +39,8 @@ type ReduceTask struct {
 
 type Coordinator struct {
 	// Your definitions here.
-	MapTasks    []MapTask
-	ReduceTasks []ReduceTask
+	MapTasks    *[]MapTask
+	ReduceTasks *[]ReduceTask
 	nReduce     int
 }
 
@@ -49,42 +49,47 @@ func (c *Coordinator) RPCHandler(args *Args, reply *Reply) error {
 	case "map done":
 		taskLock.Lock()
 
-		log.Println("Lock in map done")
-		c.MapTasks[args.MapTaskNum].State = Completed
+		(*c.MapTasks)[args.MapTaskNum].State = Completed
 		// Add reduce tasks
 		for i := 0; i < c.nReduce; i++ {
-			filename := fmt.Sprintf("mr-%d-%d.txt", args.MapTaskNum, i)
-			if len(c.ReduceTasks) <= i {
-				c.ReduceTasks = append(c.ReduceTasks, ReduceTask{[]string{filename}, Pending, 0, i})
+			filename := fmt.Sprintf("/tmp/mr-%d-%d.txt", args.MapTaskNum, i)
+			if len(*c.ReduceTasks) <= i {
+				*c.ReduceTasks = append(*c.ReduceTasks, ReduceTask{[]string{filename}, Pending, 0, i})
 			} else {
-				c.ReduceTasks[i].FileNames = append(c.ReduceTasks[i].FileNames, filename)
+				(*c.ReduceTasks)[i].FileNames = append((*c.ReduceTasks)[i].FileNames, filename)
 			}
 		}
 		taskLock.Unlock()
-		log.Printf("Map done: %v", args.FileName)
+		log.Printf("Map done: %v", args.MapTaskNum)
 	case "reduce done":
 		taskLock.Lock()
-		log.Println("Lock in reduce done")
-		c.ReduceTasks[args.ReduceTaskNum].State = Completed
+
+		// c.ReduceTasks[args.ReduceTaskNum].State = Completed
+		(*c.ReduceTasks)[args.ReduceTaskNum].State = Completed
 		taskLock.Unlock()
 		log.Println("Reduce done: ", args.ReduceTaskNum)
 	case "give me a job":
 		// assign a map task if there is any
+
 		taskLock.Lock()
-		log.Println("Lock in give me a job")
-		for i, task := range c.MapTasks {
+		pendingMapTask := -1
+		for i, task := range *c.MapTasks {
 			if task.State == Pending {
-				reply.FileName = task.FileName
-				reply.Command = "map"
-				reply.NReduce = c.nReduce
-				reply.MapTaskNum = i
-				task.State = InProgress
-				task.StartTime = time.Now().Unix()
-				log.Println("Map task ", i, " assigned")
-				taskLock.Unlock()
-				return nil
+				pendingMapTask = i
 			}
 		}
+		if pendingMapTask != -1 {
+			reply.FileName = (*c.MapTasks)[pendingMapTask].FileName
+			reply.Command = "map"
+			reply.NReduce = c.nReduce
+			reply.MapTaskNum = pendingMapTask
+			(*c.MapTasks)[pendingMapTask].State = InProgress
+			(*c.MapTasks)[pendingMapTask].StartTime = time.Now().Unix()
+			log.Printf("Map task %d assigned", pendingMapTask)
+			taskLock.Unlock()
+			return nil
+		}
+
 		taskLock.Unlock()
 		if !c.AllMapTasksDone() {
 			reply.Command = "wait"
@@ -92,23 +97,34 @@ func (c *Coordinator) RPCHandler(args *Args, reply *Reply) error {
 			return nil
 		}
 		taskLock.Lock()
+
+		pendingReduceTask := -1
 		// assign a reduce task if there is any
-		for _, task := range c.ReduceTasks {
+		for i, task := range *c.ReduceTasks {
 			if task.State == Pending {
-				reply.FileNames = task.FileNames
-				reply.Command = "reduce"
-				reply.ReduceTaskNum = task.Num
-				task.State = InProgress
-				task.StartTime = time.Now().Unix()
-				log.Printf("Reduce task %d assigned", task.Num)
-				taskLock.Unlock()
-				return nil
+				pendingReduceTask = i
 			}
 		}
+		if pendingReduceTask != -1 {
+			reply.FileNames = (*c.ReduceTasks)[pendingReduceTask].FileNames
+			reply.Command = "reduce"
+			reply.ReduceTaskNum = (*c.ReduceTasks)[pendingReduceTask].Num
+			(*c.ReduceTasks)[pendingReduceTask].State = InProgress
+			(*c.ReduceTasks)[pendingReduceTask].StartTime = time.Now().Unix()
+			log.Printf("Reduce task %d assigned", pendingReduceTask)
+			taskLock.Unlock()
+			return nil
+		}
+
 		taskLock.Unlock()
+
+		if !c.AllReduceTasksDone() {
+			reply.Command = "wait"
+			log.Println("No reduce task available, wait")
+			return nil
+		}
 		// no task left
-		reply.FileName = "done"
-		reply.Done = true
+		reply.Command = "done"
 	default:
 		log.Println("Wrong query")
 	}
@@ -118,9 +134,20 @@ func (c *Coordinator) RPCHandler(args *Args, reply *Reply) error {
 // check if all map tasks are done
 func (c *Coordinator) AllMapTasksDone() bool {
 	taskLock.Lock()
-	log.Println("Lock in all map tasks done")
 	defer taskLock.Unlock()
-	for _, task := range c.MapTasks {
+	for _, task := range *c.MapTasks {
+		if task.State != Completed {
+			return false
+		}
+	}
+	return true
+}
+
+// check if all map tasks are done
+func (c *Coordinator) AllReduceTasksDone() bool {
+	taskLock.Lock()
+	defer taskLock.Unlock()
+	for _, task := range *c.ReduceTasks {
 		if task.State != Completed {
 			return false
 		}
@@ -132,23 +159,32 @@ func (c *Coordinator) PeriodicHealthCheck() {
 
 	// check if any task is in progress for more than 10 seconds
 	// if so, mark it as pending
-	log.Println("\n\nPeriodic health check")
+	// log.Println("\n\nPeriodic health check")
 	taskLock.Lock()
-	log.Println("Lock in periodic health check")
 	defer taskLock.Unlock()
-	for i, task := range c.MapTasks {
-		log.Println("Map task ", i, " state: ", task.State)
+	pendingMapTasks := []int{}
+
+	for i, task := range *c.MapTasks {
+		// log.Println("Map task ", i, " state: ", task.State)
+		// log.Printf("Map task %d state: %d start time: %d", i, task.State, task.StartTime)
 		if task.State == InProgress && time.Now().Unix()-task.StartTime > 10 {
-			task.State = Pending
+			pendingMapTasks = append(pendingMapTasks, i)
 			log.Println("Map task ", i, " timed out")
 		}
 	}
-	for i, task := range c.ReduceTasks {
-		log.Println("Reduce task ", i, " state: ", task.State)
+	for _, i := range pendingMapTasks {
+		(*c.MapTasks)[i].State = Pending
+	}
+	pendingReduceTasks := []int{}
+	for i, task := range *c.ReduceTasks {
+		// log.Println("Reduce task ", i, " state: ", task.State)
 		if task.State == InProgress && time.Now().Unix()-task.StartTime > 10 {
-			task.State = Pending
+			pendingReduceTasks = append(pendingReduceTasks, i)
 			log.Println("Reduce task ", i, " timed out")
 		}
+	}
+	for _, i := range pendingReduceTasks {
+		(*c.ReduceTasks)[i].State = Pending
 	}
 
 }
@@ -170,31 +206,36 @@ func (c *Coordinator) server() {
 // if the entire job has finished.
 func (c *Coordinator) Done() bool {
 	taskLock.Lock()
-	log.Println("Lock in done")
-	defer taskLock.Unlock()
-	for _, task := range c.MapTasks {
+	for _, task := range *c.MapTasks {
 		if task.State != Completed {
+			taskLock.Unlock()
 			return false
 		}
 	}
-	for _, task := range c.ReduceTasks {
+	for _, task := range *c.ReduceTasks {
 		if task.State != Completed {
+			taskLock.Unlock()
 			return false
 		}
 	}
+	taskLock.Unlock()
+	log.Println("All tasks done on coordinator. Coordinator says good bye")
 	return true
 }
 
 func MakeCoordinator(files []string, nReduce int) *Coordinator {
 	c := Coordinator{}
 	c.nReduce = nReduce
+	c.MapTasks = &[]MapTask{}
+	c.ReduceTasks = &[]ReduceTask{}
 	for i, file := range files {
-		c.MapTasks = append(c.MapTasks, MapTask{file, Pending, i, 0})
+		mapTask := MapTask{file, Pending, i, 0}
+		*c.MapTasks = append(*c.MapTasks, mapTask)
 	}
 	// run periodic health check
 	go func() {
 		for {
-			time.Sleep(5 * time.Second)
+			time.Sleep(1 * time.Second)
 			c.PeriodicHealthCheck()
 		}
 	}()

@@ -1,6 +1,7 @@
 package mr
 
 import (
+	"crypto/rand"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -30,45 +31,51 @@ func ihash(key string) int {
 // main/mrworker.go calls this function.
 func Worker(mapf func(string, string) []KeyValue, reducef func(string, []string) string) {
 	isDone := false
+	// create a random worker id
+	b := make([]byte, 1)
+	rand.Read(b)
+	workerId := fmt.Sprintf("%d", b[0])
+	log.Printf("worker id: %v", workerId)
 	for !isDone {
 		time.Sleep(time.Second)
-		reply, err := CallNeedJob()
+		reply, err := CallNeedJob(workerId)
 		if err != nil {
-			log.Println("error in calling coordinator")
+			log.Printf("workerId: %v error in calling coordinator: exiting", workerId)
 			isDone = true
 		}
 		switch reply.Command {
 		case "wait":
-			log.Println("waiting for a job")
+			log.Printf("worker %v waiting for a job", workerId)
 		case "map":
 			success, err := executeMap(mapf, reply.FileName, reply.NReduce, reply.MapTaskNum)
 			if err != nil {
-				log.Println("error in executing map")
+				log.Printf("worker %v error in executing map", workerId)
 			}
 			if success {
-				log.Printf("map task %d done", reply.MapTaskNum)
+				log.Printf("worker %v map task %d done", workerId, reply.MapTaskNum)
 				CallMapSuccess(reply.MapTaskNum)
 			}
 		case "reduce":
 			success, err := executeReduce(reducef, reply.FileNames, reply.ReduceTaskNum)
 			if err != nil {
-				log.Println("error in executing reduce")
+				log.Printf("worker %v error in executing reduce", workerId)
 			}
 			if success {
-				log.Printf("reduce task %d done", reply.ReduceTaskNum)
+				CallReduceSuccess(reply.ReduceTaskNum)
 			}
+
 		case "done":
 			isDone = true
-			log.Println("all tasks done")
+			log.Printf("worker %v all tasks done: time to exit", workerId)
 		default:
+			log.Printf("worker %v reply: %v", workerId, reply)
+			log.Printf("worker %v unknown command", workerId)
 			isDone = true
-			log.Println("unknown command")
-
 		}
 	}
 }
 
-func CallNeedJob() (Reply, error) {
+func CallNeedJob(workerId string) (Reply, error) {
 	args := Args{}
 	args.Query = "give me a job"
 	reply := Reply{}
@@ -76,7 +83,7 @@ func CallNeedJob() (Reply, error) {
 	if ok {
 		return reply, nil
 	}
-	log.Println("error in calling coordinator")
+	log.Printf("worker %v error in calling coordinator", workerId)
 	return Reply{}, errors.New("error in calling coordinator")
 }
 
@@ -131,7 +138,6 @@ func executeReduce(reducef func(string, []string) string, fileNames []string, re
 		// Call reduce function
 		oname := fmt.Sprintf("mr-out-%d", reduceTaskNum)
 		ofile, _ := os.Create(oname)
-		defer ofile.Close()
 
 		// sort key value pairs by key
 		sort.Slice(kva, func(i, j int) bool {
@@ -156,10 +162,8 @@ func executeReduce(reducef func(string, []string) string, fileNames []string, re
 			fmt.Fprintf(ofile, "%v %v\n", kva[i].Key, output)
 			i = j
 		}
+		ofile.Close()
 	}
-
-	// Tell coordinator that reduce task is done
-	CallReduceSuccess(reduceTaskNum)
 	return true, nil
 }
 
@@ -181,7 +185,7 @@ func executeMap(mapf func(string, string) []KeyValue, filename string, nReduce i
 	// Create intermediate files
 	filesList := []*json.Encoder{}
 	for r := 0; r < nReduce; r++ {
-		intermediateFilename := fmt.Sprintf("mr-%d-%d.txt", mapTaskNum, r)
+		intermediateFilename := fmt.Sprintf("/tmp/mr-%d-%d.txt", mapTaskNum, r)
 		intermediateFile, err := os.Create(intermediateFilename)
 		if err != nil {
 			log.Printf("cannot open %v", intermediateFilename)
@@ -211,7 +215,8 @@ func call(rpcname string, args interface{}, reply interface{}) bool {
 	sockname := coordinatorSock()
 	c, err := rpc.DialHTTP("unix", sockname)
 	if err != nil {
-		log.Fatal("dialing:", err)
+		log.Println("dialing:", err)
+		return false
 	}
 	defer c.Close()
 
