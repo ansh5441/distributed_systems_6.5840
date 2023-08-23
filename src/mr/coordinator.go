@@ -63,8 +63,6 @@ func (c *Coordinator) RPCHandler(args *Args, reply *Reply) error {
 		log.Printf("Map done: %v", args.MapTaskNum)
 	case "reduce done":
 		taskLock.Lock()
-
-		// c.ReduceTasks[args.ReduceTaskNum].State = Completed
 		(*c.ReduceTasks)[args.ReduceTaskNum].State = Completed
 		taskLock.Unlock()
 		log.Println("Reduce done: ", args.ReduceTaskNum)
@@ -134,24 +132,27 @@ func (c *Coordinator) RPCHandler(args *Args, reply *Reply) error {
 // check if all map tasks are done
 func (c *Coordinator) AllMapTasksDone() bool {
 	taskLock.Lock()
-	defer taskLock.Unlock()
 	for _, task := range *c.MapTasks {
 		if task.State != Completed {
+			taskLock.Unlock()
 			return false
 		}
 	}
+	taskLock.Unlock()
 	return true
 }
 
 // check if all map tasks are done
 func (c *Coordinator) AllReduceTasksDone() bool {
 	taskLock.Lock()
-	defer taskLock.Unlock()
+
 	for _, task := range *c.ReduceTasks {
 		if task.State != Completed {
+			taskLock.Unlock()
 			return false
 		}
 	}
+	taskLock.Unlock()
 	return true
 }
 
@@ -165,16 +166,16 @@ func (c *Coordinator) PeriodicHealthCheck() {
 	pendingMapTasks := []int{}
 
 	for i, task := range *c.MapTasks {
-		// log.Println("Map task ", i, " state: ", task.State)
-		// log.Printf("Map task %d state: %d start time: %d", i, task.State, task.StartTime)
 		if task.State == InProgress && time.Now().Unix()-task.StartTime > 10 {
 			pendingMapTasks = append(pendingMapTasks, i)
 			log.Println("Map task ", i, " timed out")
 		}
 	}
+
 	for _, i := range pendingMapTasks {
 		(*c.MapTasks)[i].State = Pending
 	}
+
 	pendingReduceTasks := []int{}
 	for i, task := range *c.ReduceTasks {
 		// log.Println("Reduce task ", i, " state: ", task.State)
@@ -183,10 +184,10 @@ func (c *Coordinator) PeriodicHealthCheck() {
 			log.Println("Reduce task ", i, " timed out")
 		}
 	}
+
 	for _, i := range pendingReduceTasks {
 		(*c.ReduceTasks)[i].State = Pending
 	}
-
 }
 
 func (c *Coordinator) server() {

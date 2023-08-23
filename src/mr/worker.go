@@ -37,7 +37,7 @@ func Worker(mapf func(string, string) []KeyValue, reducef func(string, []string)
 	workerId := fmt.Sprintf("%d", b[0])
 	log.Printf("worker id: %v", workerId)
 	for !isDone {
-		time.Sleep(time.Second)
+		log.Printf("worker %v calling coordinator for a job", workerId)
 		reply, err := CallNeedJob(workerId)
 		if err != nil {
 			log.Printf("workerId: %v error in calling coordinator: exiting", workerId)
@@ -46,7 +46,10 @@ func Worker(mapf func(string, string) []KeyValue, reducef func(string, []string)
 		switch reply.Command {
 		case "wait":
 			log.Printf("worker %v waiting for a job", workerId)
+			time.Sleep(time.Second)
+
 		case "map":
+			log.Printf("worker %v executing map task %d", workerId, reply.MapTaskNum)
 			success, err := executeMap(mapf, reply.FileName, reply.NReduce, reply.MapTaskNum)
 			if err != nil {
 				log.Printf("worker %v error in executing map", workerId)
@@ -56,11 +59,13 @@ func Worker(mapf func(string, string) []KeyValue, reducef func(string, []string)
 				CallMapSuccess(reply.MapTaskNum)
 			}
 		case "reduce":
+			log.Printf("worker %v executing reduce task %d", workerId, reply.ReduceTaskNum)
 			success, err := executeReduce(reducef, reply.FileNames, reply.ReduceTaskNum)
 			if err != nil {
 				log.Printf("worker %v error in executing reduce", workerId)
 			}
 			if success {
+				log.Printf("worker %v reduce task %d done", workerId, reply.ReduceTaskNum)
 				CallReduceSuccess(reply.ReduceTaskNum)
 			}
 
@@ -116,13 +121,19 @@ func CallReduceSuccess(reduceTaskNum int) (Reply, error) {
 func executeReduce(reducef func(string, []string) string, fileNames []string, reduceTaskNum int) (bool, error) {
 	// Read intermediate files
 	kva := []KeyValue{}
+	// create a temp file for output. to be atomically renamed to final output file
+	// because multiple workers may be writing to the same output file
+	tempOutfile, err := os.CreateTemp("", "mr-out-temp*")
+	if err != nil {
+		log.Printf("cannot open temp file for reduce output")
+		return false, err
+	}
 	for _, filename := range fileNames {
 		jsonFile, err := os.Open(filename)
 		if err != nil {
 			log.Printf("cannot open %v", filename)
 			return false, err
 		}
-		defer jsonFile.Close()
 		dec := json.NewDecoder(jsonFile)
 		for {
 			var kv KeyValue
@@ -134,36 +145,40 @@ func executeReduce(reducef func(string, []string) string, fileNames []string, re
 			}
 			kva = append(kva, kv)
 		}
-
-		// Call reduce function
-		oname := fmt.Sprintf("mr-out-%d", reduceTaskNum)
-		ofile, _ := os.Create(oname)
-
-		// sort key value pairs by key
-		sort.Slice(kva, func(i, j int) bool {
-			return kva[i].Key < kva[j].Key
-		})
-
-		// Collect values for each key
-		for i := 0; i < len(kva); {
-			values := []string{}
-			// find the end point for the key
-			j := i + 1
-			for j < len(kva) && kva[j].Key == kva[i].Key {
-				j++
-			}
-			// collect all values for the key
-			for k := i; k < j; k++ {
-				values = append(values, kva[k].Value)
-			}
-			// Call reduce function
-			output := reducef(kva[i].Key, values)
-			// this is the correct format for each line of Reduce output.
-			fmt.Fprintf(ofile, "%v %v\n", kva[i].Key, output)
-			i = j
-		}
-		ofile.Close()
+		jsonFile.Close()
 	}
+	// sort key value pairs by key
+	sort.Slice(kva, func(i, j int) bool {
+		return kva[i].Key < kva[j].Key
+	})
+
+	// Collect values for each key
+	for i := 0; i < len(kva); {
+		values := []string{}
+		// find the end point for the key
+		j := i + 1
+		for j < len(kva) && kva[j].Key == kva[i].Key {
+			j++
+		}
+		// collect all values for the key
+		for k := i; k < j; k++ {
+			values = append(values, kva[k].Value)
+		}
+		// Call reduce function
+		output := reducef(kva[i].Key, values)
+		// this is the correct format for each line of Reduce output.
+		fmt.Fprintf(tempOutfile, "%v %v\n", kva[i].Key, output)
+		i = j
+	}
+	tempOutfile.Close()
+	// rename temp file to final output file
+	log.Printf("worker %d renaming temp file to final output file", reduceTaskNum)
+	err = os.Rename(tempOutfile.Name(), fmt.Sprintf("mr-out-%d", reduceTaskNum))
+	if err != nil {
+		log.Printf("error in renaming temp file to final output file")
+		return false, err
+	}
+	log.Printf("worker %d renamed temp file to final output file", reduceTaskNum)
 	return true, nil
 }
 
