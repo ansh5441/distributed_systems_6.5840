@@ -19,7 +19,11 @@ package raft
 
 import (
 	//	"bytes"
+	"fmt"
+	"log"
 	"math/rand"
+	"os"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -27,7 +31,6 @@ import (
 	//	"6.5840/labgob"
 	"6.5840/labrpc"
 )
-
 
 // as each Raft peer becomes aware that successive log entries are
 // committed, the peer should send an ApplyMsg to the service (or
@@ -50,6 +53,12 @@ type ApplyMsg struct {
 	SnapshotIndex int
 }
 
+const (
+	Leader int = iota
+	Candidate
+	Follower
+)
+
 // A Go object implementing a single Raft peer.
 type Raft struct {
 	mu        sync.Mutex          // Lock to protect shared access to this peer's state
@@ -59,6 +68,14 @@ type Raft struct {
 	dead      int32               // set by Kill()
 
 	// Your data here (2A, 2B, 2C).
+
+	// 2A
+	currentTerm          int
+	votedFor             int
+	electionTimerResetAt time.Time
+	electionTimeout      time.Duration
+	IAm                  int
+
 	// Look at the paper's Figure 2 for a description of what
 	// state a Raft server must maintain.
 
@@ -71,6 +88,11 @@ func (rf *Raft) GetState() (int, bool) {
 	var term int
 	var isleader bool
 	// Your code here (2A).
+	rf.mu.Lock()
+	Lg(rf.me, dTerm, fmt.Sprintf("term: %v, isleader: %v", rf.currentTerm, rf.IAm == Leader))
+	term = rf.currentTerm
+	isleader = rf.IAm == Leader
+	defer rf.mu.Unlock()
 	return term, isleader
 }
 
@@ -81,17 +103,16 @@ func (rf *Raft) GetState() (int, bool) {
 // second argument to persister.Save().
 // after you've implemented snapshots, pass the current snapshot
 // (or nil if there's not yet a snapshot).
-func (rf *Raft) persist() {
-	// Your code here (2C).
-	// Example:
-	// w := new(bytes.Buffer)
-	// e := labgob.NewEncoder(w)
-	// e.Encode(rf.xxx)
-	// e.Encode(rf.yyy)
-	// raftstate := w.Bytes()
-	// rf.persister.Save(raftstate, nil)
-}
-
+// func (rf *Raft) persist() {
+// 	// Your code here (2C).
+// 	// Example:
+// 	// w := new(bytes.Buffer)
+// 	// e := labgob.NewEncoder(w)
+// 	// e.Encode(rf.xxx)
+// 	// e.Encode(rf.yyy)
+// 	// raftstate := w.Bytes()
+// 	// rf.persister.Save(raftstate, nil)
+// }
 
 // restore previously persisted state.
 func (rf *Raft) readPersist(data []byte) {
@@ -113,7 +134,6 @@ func (rf *Raft) readPersist(data []byte) {
 	// }
 }
 
-
 // the service says it has created a snapshot that has
 // all info up to and including index. this means the
 // service no longer needs the log through (and including)
@@ -123,22 +143,45 @@ func (rf *Raft) Snapshot(index int, snapshot []byte) {
 
 }
 
-
 // example RequestVote RPC arguments structure.
 // field names must start with capital letters!
 type RequestVoteArgs struct {
 	// Your data here (2A, 2B).
+	Term         int
+	CandidateId  int
+	LastLogIndex int
+	LastLogTerm  int
 }
 
 // example RequestVote RPC reply structure.
 // field names must start with capital letters!
 type RequestVoteReply struct {
 	// Your data here (2A).
+	Term        int
+	VoteGranted bool
 }
 
 // example RequestVote RPC handler.
 func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	// Your code here (2A, 2B).
+
+	rf.mu.Lock()
+	Lg(rf.me, dVote, "RequestVote: %v", args.CandidateId)
+	defer rf.mu.Unlock()
+	// if asking vote for previous term
+	if args.Term < rf.currentTerm {
+		reply.VoteGranted = false
+		reply.Term = rf.currentTerm
+		return
+	}
+
+	if rf.votedFor == -1 || rf.votedFor == args.CandidateId {
+		reply.VoteGranted = true
+		reply.Term = args.Term
+		return
+	}
+	reply.VoteGranted = false
+	reply.Term = rf.currentTerm
 }
 
 // example code to send a RequestVote RPC to a server.
@@ -173,7 +216,6 @@ func (rf *Raft) sendRequestVote(server int, args *RequestVoteArgs, reply *Reques
 	return ok
 }
 
-
 // the service using Raft (e.g. a k/v server) wants to start
 // agreement on the next command to be appended to Raft's log. if this
 // server isn't the leader, returns false. otherwise start the
@@ -192,7 +234,6 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	isLeader := true
 
 	// Your code here (2B).
-
 
 	return index, term, isLeader
 }
@@ -217,11 +258,49 @@ func (rf *Raft) killed() bool {
 }
 
 func (rf *Raft) ticker() {
-	for rf.killed() == false {
 
+	for !rf.killed() {
 		// Your code here (2A)
 		// Check if a leader election should be started.
+		if time.Since(rf.electionTimerResetAt) > rf.electionTimeout {
+			Lg(rf.me, dTimer, "Election timeout, starting election")
+			rf.IAm = Candidate
+			// Increment current term
+			rf.currentTerm += 1
 
+			// vote for self
+			numVotes := 1
+
+			// Reset election timer
+			rf.electionTimerResetAt = time.Now()
+
+			// Send RequestVote RPCs to all other servers
+			args := RequestVoteArgs{}
+			args.Term = rf.currentTerm
+			args.CandidateId = rf.me
+			args.LastLogIndex = 0
+			args.LastLogTerm = 0
+
+			var nextTerm int
+			for server := range rf.peers {
+				if server == rf.me {
+					continue
+				}
+				repl := RequestVoteReply{}
+				rf.sendRequestVote(server, &args, &repl)
+				if repl.VoteGranted {
+					numVotes += 1
+				} else {
+					nextTerm = repl.Term
+				}
+			}
+			if numVotes > len(rf.peers)/2 {
+				rf.IAm = Leader
+			} else {
+				rf.IAm = Follower
+				rf.currentTerm = nextTerm
+			}
+		}
 
 		// pause for a random amount of time between 50 and 350
 		// milliseconds.
@@ -241,12 +320,16 @@ func (rf *Raft) ticker() {
 // for any long-running work.
 func Make(peers []*labrpc.ClientEnd, me int,
 	persister *Persister, applyCh chan ApplyMsg) *Raft {
+	debugInit()
 	rf := &Raft{}
 	rf.peers = peers
 	rf.persister = persister
 	rf.me = me
 
 	// Your initialization code here (2A, 2B, 2C).
+	rf.currentTerm = 0
+	rf.votedFor = -1
+	rf.electionTimerResetAt = time.Now()
 
 	// initialize from state persisted before a crash
 	rf.readPersist(persister.ReadRaftState())
@@ -254,6 +337,68 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	// start ticker goroutine to start elections
 	go rf.ticker()
 
-
 	return rf
+}
+
+// __________________________________________________________________________________________
+// Logger helper
+// Retrieve the verbosity level from an environment variable
+func getVerbosity() int {
+	v := os.Getenv("VERBOSE")
+	level := 0
+	if v != "" {
+		var err error
+		level, err = strconv.Atoi(v)
+		if err != nil {
+			log.Fatalf("Invalid verbosity %v", v)
+		}
+	}
+	// log.Printf("Verbosity level %v", level)
+	return level
+}
+
+type logTopic string
+
+const (
+	dClient  logTopic = "CLNT"
+	dCommit  logTopic = "CMIT"
+	dDrop    logTopic = "DROP"
+	dError   logTopic = "ERRO"
+	dInfo    logTopic = "INFO"
+	dLeader  logTopic = "LEAD"
+	dLog     logTopic = "LOG1"
+	dLog2    logTopic = "LOG2"
+	dPersist logTopic = "PERS"
+	dSnap    logTopic = "SNAP"
+	dTerm    logTopic = "TERM"
+	dTest    logTopic = "TEST"
+	dTimer   logTopic = "TIMR"
+	dTrace   logTopic = "TRCE"
+	dVote    logTopic = "VOTE"
+	dWarn    logTopic = "WARN"
+)
+
+var debugStart time.Time
+var debugVerbosity int
+
+func debugInit() {
+	debugVerbosity = getVerbosity()
+	debugStart = time.Now()
+	log.SetFlags(log.Flags() &^ (log.Ldate | log.Ltime))
+}
+
+func Lg(me int, topic logTopic, format string, a ...interface{}) {
+	if debugVerbosity >= 1 {
+		time := time.Since(debugStart).Microseconds()
+		time /= 100
+		prefixSpaced := ""
+		prefixSpaces := 40
+		for i := 0; i < me*prefixSpaces; i++ {
+			prefixSpaced += " "
+		}
+		prefix := fmt.Sprintf("%s %06d S%d %v ", prefixSpaced, time, me, string(topic))
+
+		format = prefix + format
+		log.Printf(format, a...)
+	}
 }
