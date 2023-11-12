@@ -77,6 +77,8 @@ type Raft struct {
 	IAm                  int
 	// 2B
 	log []LogEntry
+	// others
+	electionTimerLock sync.Mutex
 }
 
 // return currentTerm and whether this server
@@ -326,15 +328,16 @@ func (rf *Raft) ticker() {
 	for !rf.killed() {
 		// Your code here (2A)
 		// Check if a leader election should be started.
+		rf.mu.Lock()
 		if time.Since(rf.electionTimerResetAt) > rf.electionTimeout {
 			Lg(rf.me, dTimer, "Election timeout, starting election")
-			rf.mu.Lock()
 			Lg(rf.me, dTimer, "Locking for election params")
 			rf.IAm = Candidate
 			// Increment current term
 			rf.currentTerm += 1
 			// vote for self
-			numVotes := 1
+			numVotes := atomic.Int32{}
+			numVotes.Add(1)
 			rf.votedFor = rf.me
 			// Reset election timer
 			rf.electionTimerResetAt = time.Now()
@@ -361,7 +364,7 @@ func (rf *Raft) ticker() {
 					rf.sendRequestVote(server, &args, &repl)
 					Lg(rf.me, dTimer, "Received vote from %v: %v for term %v", server, repl.VoteGranted, repl.Term)
 					if repl.VoteGranted && repl.Term == rf.currentTerm {
-						numVotes += 1
+						numVotes.Add(1)
 					} else {
 						nextTerm = repl.Term
 					}
@@ -382,7 +385,7 @@ func (rf *Raft) ticker() {
 				rf.IAm = Follower
 				Lg(rf.me, dTimer, "Becoming follower %v", rf.currentTerm)
 			}
-			if rf.IAm == Candidate && numVotes > len(rf.peers)/2 {
+			if rf.IAm == Candidate && int(numVotes.Load()) > len(rf.peers)/2 {
 				rf.IAm = Leader
 				Lg(rf.me, dTimer, "Becoming leader %v", rf.currentTerm)
 
@@ -409,6 +412,8 @@ func (rf *Raft) ticker() {
 				}
 			}
 
+			rf.mu.Unlock()
+		} else {
 			rf.mu.Unlock()
 		}
 
@@ -437,12 +442,14 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.me = me
 
 	// Your initialization code here (2A, 2B, 2C).
+	rf.mu.Lock()
 	rf.currentTerm = 0
 	rf.votedFor = -1
 	rf.electionTimerResetAt = time.Now()
 	rf.electionTimeout = 500 * time.Millisecond
 	rf.IAm = Follower
-
+	rf.log = []LogEntry{}
+	rf.mu.Unlock()
 	// initialize from state persisted before a crash
 	rf.readPersist(persister.ReadRaftState())
 
